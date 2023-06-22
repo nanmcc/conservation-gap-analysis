@@ -14,8 +14,15 @@
 ### DESCRIPTION:
   ## This script creates an interactive (HTML) occurrence point map for each 
   #   target taxon, for exploring and (optionally) retrieving the UIDs of points 
-  #   to be removed before final anlayses. Includes toggles that show points 
-  #   flagged in 5-flag_occurrence_points.R
+  #   to be removed before final anlayses. Includes checkbox toggles that show 
+  #   points flagged in 5-flag_occurrence_points.R, plus some additional flags.
+  ## Note that you can add additional flagging checkboxes to the map by adding
+  #   additional 'addCircleMarkers' sections; for example, copy line 316-336 
+  #   and edit the 'filter' arguments (second line) and the 'group' text 
+  #   (last line) then go to 'overlayGroups' (line 424) and add an entry for 
+  #   the group you just created. You can of course remove checkboxes by doing
+  #   the opposite (remove the addCircleMarkers section and the corresponding  
+  #   overlayGroups entry).
 
 ### INPUTS:
   ## target_taxa_with_synonyms.csv
@@ -43,10 +50,10 @@
 ################################################################################
 
 # install rnaturalearthdata package if you don't have it yet
-install.packages('rnaturalearthdata')
+install.packages('rnaturalearthdata') # my version is 0.1.0
 
 # load packages
-my.packages <- c('tidyverse','textclean','terra','rnaturalearth','leaflet')
+my.packages <- c('tidyverse','textclean','rnaturalearth','leaflet')
   # versions I used (in the order listed above): 2.0.0, 0.9.3, 1.7-29, 0.3.3, 2.1.2
 #install.packages (my.packages) #Turn on to install current versions
 lapply(my.packages, require, character.only=TRUE)
@@ -83,7 +90,7 @@ nrow(target_taxa)
 
 # save file that can be (optionally) used for manually flagging points for removal
 edits <- data.frame(taxon_name_accepted = target_taxa$taxon_name_accepted,
-                    remove_id	= "", keep_id	= "", remove_bounding_box = "",
+                    remove_id	= "", remove_bounding_box = "", keep_id	= "", 
                     reviewer_notes	= "", reviewer_name = "")
 if(file.exists(file.path(main_dir,occ_dir,standardized_occ,"manual_point_edits.csv"))){
   "You've already created this file; if you'd like to overwrite it, run the 'else' statement manually"
@@ -102,11 +109,8 @@ taxa_cycle
 countries <- target_taxa$all_native_dist_iso2
 
 # read in world countries layer from rnaturalearth package
-world_polygons <- vect(ne_countries(scale = 50, type = "countries", 
-                                returnclass = "sf"))
-# make the terra object (SpatVector) in a simple feature object (leaflet 
-#   doesn't take SpatVector)
-world_polygons <- sf::st_as_sf(world_polygons)
+world_polygons <- ne_countries(scale = 50, type = "countries", 
+                                returnclass = "sf")
 
 ### cycle through each species file and create map
 for(i in 1:length(taxa_cycle)){
@@ -118,8 +122,8 @@ for(i in 1:length(taxa_cycle)){
   ## create a color palette for the map's points, based on source database
     # set database as factor and order as you'd like for viewing overlapping
     #   points; earlier databases will be shown on top of latter databases
-  database_order <- c("Ex_situ","GBIF","NorthAm_herbaria","iDigBio",
-                      "IUCN_RedList","FIA","BIEN")
+  database_order <- c("Ex_situ","NorthAm_herbaria","iDigBio","GBIF","FIA",
+                      "IUCN_RedList","BIEN")
   taxon_now$database <- factor(taxon_now$database, levels = database_order)
   taxon_now <- taxon_now %>% arrange(desc(database))
     # create color palette (one color for each database)
@@ -446,5 +450,5 @@ for(i in 1:length(taxa_cycle)){
                                                    standardized_occ,data_out,
     paste0(taxa_cycle[i], "__map-for-vetting.html"))))
 
-  cat("\tEnding ", taxa_cycle[i], ", ", i, " of ", length(taxa_cycle), ".\n\n", sep="")
+  cat("\tMapped ", taxa_cycle[i], ", ", i, " of ", length(taxa_cycle), ".\n\n", sep="")
 }
