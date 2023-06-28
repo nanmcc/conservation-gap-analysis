@@ -3,11 +3,12 @@
 ### Supporting institutions: The Morton Arboretum, Botanic Gardens Conservation 
 #   International-US, United States Botanic Garden, San Diego Botanic Garden,
 #   Missouri Botanical Garden, UC Davis Arboretum & Botanic Garden
-### Funding: Base script funded by the Institute of Museum and Library 
-#   Services (IMLS MFA program grant MA-30-18-0273-18 to The Morton Arboretum).
-#   Moderate edits were added with funding from a cooperative agreement
-#   between the United States Botanic Garden and San Diego Botanic Garden
-#   (subcontracted to The Morton Arboretum), and NSF ABI grant #1759759
+### Funding: 
+#   -- Institute of Museum and Library Services (IMLS MFA program grant
+#        MA-30-18-0273-18 to The Morton Arboretum)
+#   -- United States Botanic Garden (cooperative agreement with San Diego
+#        Botanic Garden)
+#   -- NSF (award 1759759 to The Morton Arboretum)
 ### Last Updated: June 2023 ; first written Feb 2020
 ### R version 4.3.0
 
@@ -21,6 +22,12 @@
   #   addressing issues common in biological collection databases."
   #   See the article here:
   #   https://besjournals.onlinelibrary.wiley.com/doi/full/10.1111/2041-210X.13152
+  ## NOTE THAT THE CoordinateCleaner PACKAGE CURRENT VERSION (2.0-20) DEPENDS ON
+  ## rgeos and rgdal, WHICH WILL RETIRE SHORTLY! If the package does not release
+  ## an update that removes these dependencies, the functions in this script 
+  ## that use CoordinateCleaner will need to be replaced manually or skipped; 
+  ## but, it looks like they are working on removing dependencies:
+  ## https://github.com/ropensci/CoordinateCleaner/issues/78
 
 ### INPUTS:
   ## target_taxa_with_synonyms.csv
@@ -108,39 +115,8 @@ summary_tbl <- data.frame(
   .yrna = "start", 
     stringsAsFactors=F)
 
-# select columns and order
-  col_names <- c( 
-    #data source and unique ID
-    "UID","database","all_source_databases",
-    #taxon
-    "taxon_name_accepted","taxon_name_status",
-    "taxon_name","scientificName","genus","specificEpithet",
-    "taxonRank","infraspecificEpithet","taxonIdentificationNotes",
-    #event
-    "year","basisOfRecord",
-    #record-level
-    "nativeDatabaseID","institutionCode","datasetName","publisher",
-    "rightsHolder","license","references","informationWithheld",
-    "issue","recordedBy",
-    #occurrence
-    "establishmentMeans","individualCount",
-    #location
-    "decimalLatitude","decimalLongitude",
-    "coordinateUncertaintyInMeters","geolocationNotes",
-    "localityDescription","locality","verbatimLocality",
-    "locationNotes","municipality","higherGeography","county",
-    "stateProvince","country","countryCode","countryCode_standard",
-    "latlong_countryCode",
-    #additional optional data from target taxa list
-    "rl_category","ns_rank",
-    #flag columns
-    ".cen",".urb",".inst",".con",".outl",
-    ".nativectry",
-    ".yr1950",".yr1980",".yrna"
-  )
 
-## iterate through each species file to flag suspect points
-cat("Starting ","target ","taxa (", length(target_taxa)," total)",".\n\n",sep="")
+## iterate through each species file to flag suspect points...
 
 for (i in 1:length(target_taxa)){
 
@@ -151,10 +127,73 @@ for (i in 1:length(target_taxa)){
   # bring in records
   taxon_now <- read.csv(file.path(main_dir,occ_dir,standardized_occ,data_in,
     paste0(taxon_file, ".csv")))
+  # print the taxon name we're working with
+  cat("-----\n","Starting ", taxon_nm, ", taxon ", i, " of ", length(target_taxa), ".\n", sep="")
+  cat("Number of records: ",nrow(taxon_now),"\n",sep="")
   
   
   # now we will go through a set of tests to flag potentially suspect records...
 
+  
+  ### FLAG RECORDS THAT HAVE COORDINATES NEAR COUNTRY AND STATE/PROVINCE CENTROIDS
+  flag_cen <- CoordinateCleaner::cc_cen(
+    taxon_now,
+    lon = "decimalLongitude", lat = "decimalLatitude",
+    # buffer = radius around country/state centroids (meters); default=1000
+    buffer = 500, value = "flagged")
+  taxon_now$.cen <- flag_cen
+  
+  
+  ## FLAG RECORDS THAT HAVE COORDINATES IN URBAN AREAS
+  if(nrow(taxon_now)<2){
+    taxon_now$.urb <- NA
+    print("Taxa with fewer than 2 records will not be tested.")
+  } else {
+    taxon_now <- as.data.frame(taxon_now)
+    flag_urb <- CoordinateCleaner::cc_urb(
+      taxon_now,
+      lon = "decimalLongitude",lat = "decimalLatitude",
+      ref = urban_areas, value = "flagged")
+    taxon_now$.urb <- flag_urb
+  }
+  
+  
+  ### FLAG RECORDS THAT HAVE COORDINATES NEAR BIODIVERSITY INSTITUTIONS
+  flag_inst <- CoordinateCleaner::cc_inst(
+    taxon_now,
+    lon = "decimalLongitude", lat = "decimalLatitude",
+    # buffer = radius around biodiversity institutions (meters); default=100
+    buffer = 100, value = "flagged")
+  taxon_now$.inst <- flag_inst
+  
+  
+  ### COMPARE THE COUNTRY LISTED IN THE RECORD VS. THE LAT-LONG COUNTRY; flag
+  #   when there is a mismatch; CoordinateCleaner package has something like 
+  #   this but also flags when the record doesn't have a country...
+  #   you could use that function if you want to flag NAs, or edit below:
+  taxon_now <- taxon_now %>% mutate(.con=(ifelse(
+    (as.character(latlong_countryCode) == as.character(countryCode_standard) &
+       !is.na(latlong_countryCode) & !is.na(countryCode_standard)) |
+      is.na(latlong_countryCode) | is.na(countryCode_standard), TRUE, FALSE)))
+  cat("Testing country listed\n",sep="")
+  cat("Flagged ",length(which(!taxon_now$.con))," records.\n",sep="")
+  
+  
+  ### FLAG SPATIAL OUTLIERS
+  taxon_now <- as.data.frame(taxon_now)
+  flag_outl <- CoordinateCleaner::cc_outl(
+    taxon_now,
+    lon = "decimalLongitude",lat = "decimalLatitude",
+    species = "taxon_name_accepted", 
+    # read more about options for the method and the multiplier:
+    #   https://www.rdocumentation.org/packages/CoordinateCleaner/versions/2.0-20/topics/cc_outl
+    # if you make the multiplier larger, it will flag less points.
+    # the default is 5; you may need to experiment a little to see what works
+    #   best for most of your target taxa (script #6 helps you view flagged pts)
+    method = "quantile", mltpl = 7, 
+    value = "flagged")
+  taxon_now$.outl <- flag_outl
+  
   
   ### CHECK LAT-LONG COUNTRY AGAINST "ACCEPTED" NATIVE COUNTRY DISTRUBUTION; 
   #   flag when the lat-long country is not in the list of native countries;
@@ -169,75 +208,33 @@ for (i in 1:length(target_taxa)){
   } else {
     taxon_now$.nativectry <- NA
   }
+  cat("Testing native countries\n",sep="")
+  cat("Flagged ",length(which(!taxon_now$.nativectry))," records.\n",sep="")
 
   
-  ### COMPARE THE COUNTRY LISTED IN THE RECORD VS. THE LAT-LONG COUNTRY; flag
-  #   when there is a mismatch; CoordinateCleaner package has something like 
-  #   this but also flags when the record doesn't have a country..didn't love that
-  taxon_now <- taxon_now %>% mutate(.con=(ifelse(
-    (as.character(latlong_countryCode) == as.character(countryCode_standard) &
-       !is.na(latlong_countryCode) & !is.na(countryCode_standard)) |
-      is.na(latlong_countryCode) | is.na(countryCode_standard), TRUE, FALSE)))
-  
-  
   ### FLAG OLDER RECORDS, based on two different year cutoffs (1950 & 1980)
+    # 1950 cutoff
   taxon_now <- taxon_now %>% mutate(.yr1950=(ifelse(
     (as.numeric(year)>1950 | is.na(year)), TRUE, FALSE)))
+  cat("Testing year < 1950\n",sep="")
+  cat("Flagged ",length(which(!taxon_now$.yr1950))," records.\n",sep="")
+    # 1980 cutoff
   taxon_now <- taxon_now %>% mutate(.yr1980=(ifelse(
     (as.numeric(year)>1980 | is.na(year)), TRUE, FALSE)))
+  cat("Testing year < 1980\n",sep="")
+  cat("Flagged ",length(which(!taxon_now$.yr1980))," records.\n",sep="")
   
   
   ### FLAG RECORDS THAT DON'T HAVE A YEAR PROVIDED
   taxon_now <- taxon_now %>% mutate(.yrna=(ifelse(
     !is.na(year), TRUE, FALSE)))
+  cat("Testing year NA\n",sep="")
+  cat("Flagged ",length(which(!taxon_now$.yrna))," records.\n\n",sep="")
   
   
-  ### FLAG RECORDS THAT HAVE COORDINATES NEAR BIODIVERSITY INSTITUTIONS AND/OR
-  ###   COUNTRY AND STATE/PROVINCE CENTROIDS
-  taxon_now <- CoordinateCleaner::clean_coordinates(taxon_now,
-    lon = "decimalLongitude", lat = "decimalLatitude",
-    species = "taxon_name_accepted",
-    # radius around country/state centroids (meters); default=1000
-    centroids_rad = 500, 
-    # radius around biodiversity institutions (meters)
-    inst_rad = 100, 
-    tests = c("centroids","institutions"))
-  
-  
-  ## FLAG RECORDS THAT HAVE COORDINATES IN URBAN AREAS
-  if(nrow(taxon_now)<2){
-    taxon_now$.urb <- NA
-    print("Taxa with fewer than 2 records will not be tested.")
-  } else {
-    taxon_now <- as.data.frame(taxon_now)
-    flag_urb <- CoordinateCleaner::cc_urb(taxon_now,
-      lon = "decimalLongitude",lat = "decimalLatitude",
-      ref = urban_areas, value = "flagged")
-    taxon_now$.urb <- flag_urb
-  }
-  
-  
-  ### FLAG SPATIAL OUTLIERS
-  taxon_now <- as.data.frame(taxon_now)
-  flag_outl <- CoordinateCleaner::cc_outl(taxon_now,
-    lon = "decimalLongitude",lat = "decimalLatitude",
-    species = "taxon_name_accepted", 
-    # read more about options for the method and the multiplier:
-    #   https://www.rdocumentation.org/packages/CoordinateCleaner/versions/2.0-20/topics/cc_outl
-    # if you make the multiplier larger, it will flag less points.
-    # the default is 5; you may need to experiment a little to see what works
-    #   best for most of your target taxa (script #6 helps you view flagged pts)
-    method = "quantile", mltpl = 7, 
-    value = "flagged")
-  taxon_now$.outl <- flag_outl
+  # create some subsets to count how many records are in each, for summary table...
 
-  
-  # set everything up for saving...
-
-  # set column order and remove a few unnecessary columns
-  taxon_now <- taxon_now %>% dplyr::select(all_of(col_names))
-  
-  # subset of completely unflagged points
+  # count of completely unflagged points
   total_unflagged <- taxon_now %>%
     filter(.cen & .urb & .inst & .con & .outl & .yr1950 & .yr1980 & .yrna &
              (.nativectry | is.na(.nativectry)) &
@@ -248,17 +245,26 @@ for (i in 1:length(target_taxa)){
              establishmentMeans != "CULTIVATED"
     )
   
-  # OPTIONAL subset of unflagged points based on selected filters you'd like 
-  #   to use; change as desired; commented out lines are those we aren't using
+  # OPTIONAL count of unflagged points based on selected filters you'd like 
+  #   to use, to see how many points there are; change as desired; commented- 
+  #   out lines are the filters we don't want to use
   select_unflagged <- taxon_now %>%
-    filter(.cen & .inst & .outl & 
-             #.urb & .con & .yr1950 & .yr1980 & .yrna &
-             (.nativectry | is.na(.nativectry)) &
-             basisOfRecord != "FOSSIL_SPECIMEN" & 
-             basisOfRecord != "LIVING_SPECIMEN" &
-             establishmentMeans != "INTRODUCED" & 
-             establishmentMeans != "MANAGED" &
-             establishmentMeans != "CULTIVATED"
+    filter(
+            .cen & 
+            .inst & 
+            .outl &
+            .con & 
+            #.urb & 
+            .yr1950 & 
+            #.yr1980 & 
+            #.yrna &
+            (.nativectry | is.na(.nativectry)) &
+            basisOfRecord != "FOSSIL_SPECIMEN" &
+            basisOfRecord != "LIVING_SPECIMEN" &
+            establishmentMeans != "INTRODUCED" &
+            establishmentMeans != "MANAGED" &
+            establishmentMeans != "INVASIVE" &
+            establishmentMeans != "CULTIVATED"
     )
   
   # add data to summary table
@@ -282,13 +288,14 @@ for (i in 1:length(target_taxa)){
   write.csv(taxon_now, file.path(main_dir,occ_dir,standardized_occ,data_out,
     paste0(taxon_file, ".csv")), row.names=FALSE)
 
-  cat("Ending ", taxon_nm, ", ", i, " of ", length(target_taxa), ".\n\n", sep="")
 }
 
 # add summary of points to summary we created in 4-compile_occurrence_points.R
 file_nm <- list.files(path = file.path(main_dir,occ_dir,standardized_occ),
                       pattern = "summary_of_occurrences", full.names = T)
 orig_summary <- read.csv(file_nm, colClasses = "character")
+  # keep just the first four columns, in case you're running this script a second time
+orig_summary <- orig_summary %>% select(taxon_name_accepted:num_water_records)
 summary_tbl2 <- full_join(orig_summary,summary_tbl,by="taxon_name_accepted")
 summary_tbl2
 
